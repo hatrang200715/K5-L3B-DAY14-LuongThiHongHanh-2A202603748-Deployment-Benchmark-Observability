@@ -496,3 +496,17 @@ Kết quả chấm thực tế — `python check_production_ready.py` (chạy đ
 ```
 
 Chi tiết đáng chú ý từ output chấm: image **262 MB** (< 500 MB); 429 sau **5** request đúng `RATE_LIMIT_PER_MINUTE=5` do env; **402 ở request thứ 2** khi budget bị ép về `0.000001`; restart agent **vẫn 429** (state trong Redis); `/ready` **503** khi Redis mất kết nối trong khi `/health` vẫn **200**; `docker stop` tắt êm — **exit code 0, 0.7s**; SIGTERM giữa chừng thì request đang chạy vẫn **200**.
+
+## AI log
+
+*(theo RULES.md: mỗi lần dùng AI — hỏi gì, nhận gì, tự sửa/tự kiểm tra thế nào)*
+
+- **CP0–CP1 (Part 1):** Hỏi AI tóm tắt các bước làm bài lab và làm Part 1. AI chỉ ra 8 anti-pattern trong `01-localhost-vs-production/develop/app.py` và chạy thử develop (8001)/production (8002). Tự kiểm tra: tự đọc lại `develop/app.py` từng dòng, đối chiếu anti-pattern với bản `production/app.py` đã sửa, tự chạy 2 lệnh `curl` xem response khác nhau (AI không đọc hộ kết quả).
+- **CP2 (Part 2):** Hỏi AI chạy build 2 image và stack compose. AI thực hiện lệnh, mình tự đo lại `docker images` để lấy số MB (develop 1.67GB / production 265MB) và tự gọi Nginx để kiểm tra.
+- **CP3 (Part 4):** Hỏi AI test 401/403/200, JWT và rate limit. AI chạy lệnh, mình đối chiếu mã HTTP với lý thuyết 401/403 trong Part 4 và tự bấm lại vòng lặp 429 theo CHECKPOINTS. Lưu ý: token lấy từ `/auth/token` với `student/demo123` theo lưu ý K5 #6 (không phải `admin/secret` như mẫu).
+- **CP4 (Part 5):** Hỏi AI làm Ex 5.1–5.5. AI chạy compose `--scale agent=3` và `test_stateless.py`; mình tự kiểm tra thêm bằng cách `docker stop` 1 instance giữa conversation và thấy vẫn 200, history còn — phần này là mình tự nghĩ ra để thử.
+- **CP5 (Part 6):** Nhờ AI hoàn thành các TODO trong `06-lab-complete/`. Sau đó chạy `python check_production_ready.py` (bản đầy đủ, có Docker) → PASS 12/12, 43/43 checks; mình đọc từng mục ❌/✅ trong output (lần đầu thiếu deps chỉ báo lỗi môi trường, cài lại requirements rồi chạy lại thấy 12/12). Mình cũng dùng AI giúp viết `railway.toml`/`render.yaml`.
+- **CP6 (Part 3):** Hỏi AI hướng dẫn deploy. Railway bị workspace limit nên chuyển sang Render; AI sửa `render.yaml` (thêm `rootDir`, service `keyvalue`), mình tự push code lên GitHub và tự thao tác trên dashboard Render, tự chạy 4 lệnh test (200/200/401/200) và tự chụp 3 ảnh. Lần đầu curl bị lỗi JSON "Extra data" do dán lệnh sai — mình tự chạy lại và sửa.
+- **CP7 (Part 7 Bước 1):** Nhờ AI chạy load test/eval. Vì máy có Python 3.15 không cài được pydantic 2.9 nên 2 agent chạy trong container python:3.11. Số trong báo cáo lấy từ JSON output; mình tự đọc report để biết v2 thiếu keyword ở `security-02`, `scaling-03` và tự xem lại entry KNOWLEDGE_BASE AI thêm vào có đúng nội dung không, rồi tự chạy lại eval tới 23/23.
+- **CP8 (Part 7 Bước 2):** Nhờ AI bật stack, chạy Locust headless và 5 thí nghiệm chaos. Mình tự chụp 4 ảnh (Grafana, 2 trace Jaeger, trang Alerts của Prometheus) và tự đọc ảnh xác nhận có 2 alert FIRING. Ảnh `prometheus-alert-firing.png` chụp lúc `AgentHighErrorRate` + `LLMCostBurnRateHigh` đang firing cùng lúc.
+- **Sai lầm gặp phải & sửa:** lần chạy check đầu ra 4/12 do thiếu fastapi/uvicorn trong venv (không phải code sai); lần dán curl bị lỗi JSON; skeleton `benchmark-observability/production/Dockerfile` bị bug `useradd -d /app` khiến agent không import được packages — đã sửa thành `-d /home/agent` và ghi rõ trong báo cáo.
