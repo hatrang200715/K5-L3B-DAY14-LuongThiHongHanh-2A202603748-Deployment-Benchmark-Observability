@@ -1,0 +1,33 @@
+{
+    "status": "success",
+    "data": {
+        "alerts": [
+            {
+                "labels": {
+                    "alertname": "AgentHighErrorRate",
+                    "severity": "critical"
+                },
+                "annotations": {
+                    "description": "Error rate hi\u1ec7n t\u1ea1i: 20.32% (SLO: < 5%)",
+                    "summary": "Error rate /ask v\u01b0\u1ee3t 5%"
+                },
+                "state": "firing",
+                "activeAt": "2026-11-26T16:20:07.401817116Z",
+                "value": "2.0320203379523225e-01"
+            },
+            {
+                "labels": {
+                    "alertname": "LLMCostBurnRateHigh",
+                    "severity": "warning"
+                },
+                "annotations": {
+                    "description": "T\u1ed1c \u0111\u1ed9 chi ti\u00eau hi\u1ec7n t\u1ea1i: $2.05/gi\u1edd",
+                    "summary": "Chi ph\u00ed LLM \u0111ang v\u01b0\u1ee3t $2/gi\u1edd"
+                },
+                "state": "firing",
+                "activeAt": "2026-11-26T16:24:57.571501534Z",
+                "value": "2.0463007335464583e+00"
+            }
+        ]
+    }
+}

@@ -94,61 +94,75 @@ Exit code khác 0 → step fail → pull request không merge được. Như v�
 
 ## 4. Observability stack (production)
 
+Stack bật bằng: `docker compose -p k5-day14-observability up -d --build --scale agent=1` (theo lưu ý K5 #7). Agent chạy image `benchmark-observability/production` (fix 1 lỗi skeleton: `useradd -d /app agent` làm user site-packages lệch đường dẫn → đổi thành `-d /home/agent`).
+
 ### 4.1 Screenshot
 
-- [ ] Dashboard Grafana khi đang có tải (thấy rõ Golden Signals)
-- [ ] Một trace chậm trong Jaeger (thấy span nào chiếm thời gian)
-- [ ] Một trace lỗi trong Jaeger (có event `exception`)
-- [ ] Trang Alerts của Prometheus với ít nhất 1 alert đang **firing**
+- [x] Dashboard Grafana khi đang có tải (thấy rõ Golden Signals) — lưu `screenshots/grafana-dashboard.png`
+- [x] Một trace chậm trong Jaeger (thấy span nào chiếm thời gian) — lưu `screenshots/jaeger-slow-trace.png`
+- [x] Một trace lỗi trong Jaeger (có event `exception`) — lưu `screenshots/jaeger-error-trace.png`
+- [x] Trang Alerts của Prometheus với ít nhất 2 alert đang **firing** — lưu `screenshots/prometheus-alert-firing.png`
+
+Bằng chứng API trạng thái alerts lúc 2 alert cùng firing: `screenshots/prometheus-alerts-api.json` (`AgentHighErrorRate` value 23.78% + `LLMCostBurnRateHigh` value $2.05/giờ, đều `state: firing`).
 
 ### 4.2 Thí nghiệm "phá hệ thống"
 
+Giữ Locust chạy 30 users liên tục trong suốt thí nghiệm. Đổi cấu hình qua `.env` + `docker compose up -d`; thời điểm firing đọc từ Prometheus API `/api/v1/alerts` (poll 10s/lần).
+
 | # | Thay đổi | Alert nào firing | Thời gian từ lúc đổi → firing | Panel nào phản ánh rõ nhất |
 |---|---|---|---|---|
-| A | `MOCK_ERROR_RATE=0.2` | | | |
-| B | `MOCK_SLOW_RATE=0.3` | | | |
-| C | `LLM_MODEL=mock-llm-large` | | | |
-| D | `docker pause` 1 instance | | | |
-| E | `AGENT_VERSION=v1` | | | |
+| A | `MOCK_ERROR_RATE=0.2` | `AgentHighErrorRate` (critical) | điều kiện đúng t+24s, **firing t+~84s** (for: 1m); error rate 23.78%. Kèm theo: `LLMCostBurnRateHigh` firing ở phút thứ 5 ($2.05/giờ) | Panel Error rate đỏ; Jaeger thấy trace lỗi |
+| B | `MOCK_SLOW_RATE=0.3` | `AgentHighLatencyP95` (warning) | điều kiện đúng khi traffic đều, **firing sau ~2 phút 6 giây** (for: 2m) | p95/p99 tăng vọt (~1.7–1.9s), avg tăng ít hơn |
+| C | `LLM_MODEL=mock-llm-large` | `LLMCostBurnRateHigh` (warning) | burn rate leo $3.7 → $17.6/giờ, **firing sau ~2 phút 40 giây** (for: 2m) | Panel Cost USD/giờ (tăng ~16 lần), LLM p95 tăng |
+| D | `docker pause` 1 instance | `AgentInstanceDown` (critical) | pending t+16s, **firing t+48s** (up==0 đủ for: 30s + chu kỳ scrape) | Panel Instances up giảm 3→2; Locust thấy 504 nhưng Error rate của agent vẫn xanh |
+| E | `AGENT_VERSION=v1` | **Không có** (chỉ còn dư âm cost alert từ C) | sau 90s không alert mới nào | Panel "version đang chạy" đổi thành v1, Retrieval hit ratio mất, tokens/câu giảm |
 
-**Thí nghiệm E không làm alert nào firing. Bạn sẽ phát hiện loại sự cố này trong production bằng cách nào?**
-
-...
+**Thí nghiệm E không làm alert nào firing. Bạn sẽ phát hiện loại sự cố này trong production bằng cách nào?** Đây là lỗi **chất lượng** (agent trả lời sai/nông), không phải lỗi hạ tầng — metrics RED/golden signals vẫn xanh. Cách phát hiện: (1) **eval chất lượng trên golden dataset** chạy định kỳ hoặc trong CI/CD (quality gate như Exercise 7.3 — chính là bước đã bắt được v1 4.3% vs v2 91.3%); (2) theo dõi **business metrics** từ dashboard (Retrieval hit ratio rớt về 0, tokens/câu giảm đột ngột) và đặt alert theo chúng; (3) synthetic checks — gửi câu hỏi biết-sẵn-đáp-án vào agent mỗi phút và so keyword. Bài học: "dashboard xanh ≠ agent đúng".
 
 ### 4.3 Debug bằng trace
 
-Chọn 1 trace chậm nhất bạn tìm được:
+Trace chậm nhất (tìm bằng log → Jaeger; span chậm nhất là span LLM, không phải code app):
 
-- `trace_id`: ...
-- Tổng thời gian: ... ms
-- Span chiếm nhiều thời gian nhất: ... (... ms, ...%)
-- Dòng log tương ứng (grep theo `trace_id`):
+- `trace_id`: `4af8deae735b2ff01a951f5b17dd2006`
+- Tổng thời gian: **1727 ms**
+- Span chiếm nhiều thời gian nhất: `chat mock-llm-small` (**1699 ms, ~98%**) — còn lại `agent.run`, `agent.retrieve_context` chỉ chiếm vài chục ms → nút thắt nằm ở LLM provider, không phải code app.
+- Dòng log tương ứng (grep theo `trace_id`, lưu trong `screenshots/trace-evidence.jsonl`):
 
 ```json
+{"ts": "2026-11-26T16:14:15.158528+00:00", "level": "INFO", "service": "observable-agent", "instance": "149deca93f58", "event": "llm_call", "trace_id": "4af8deae735b2ff01a951f5b17dd2006", "span_id": "ef745ba056475385", "request_id": "d5fe596f363f", "model": "mock-llm-small", "agent_version": "v2", "input_tokens": 99, "output_tokens": 61, "cost_usd": 5.1e-05, "llm_ms": 1699.0}
+{"ts": "2026-11-26T16:14:15.159501+00:00", "level": "INFO", "service": "observable-agent", "instance": "149deca93f58", "event": "http_request", "trace_id": "4af8deae735b2ff01a951f5b17dd2006", "span_id": "ef745ba056475385", "request_id": "d5fe596f363f", "method": "POST", "route": "/ask", "status": 200, "ms": 1727.1}
+```
 
+Trace lỗi (span `chat ...` có event `exception`, mock upstream 503):
+
+```json
+{"ts": "2026-11-26T16:12:29.165288+00:00", "level": "INFO", "service": "observable-agent", "instance": "1f051a3c0093", "event": "llm_error", "trace_id": "f95d3b17c3753ebe3b40cd93331ac77b", "span_id": "7f9a11a40774b762", "request_id": "61136c5e6ec5", "error": "Upstream LLM error: 503 Service Unavailable (mock)"}
+{"ts": "2026-11-26T16:12:29.166181+00:00", "level": "INFO", "service": "observable-agent", "instance": "1f051a3c0093", "event": "http_request", "trace_id": "f95d3b17c3753ebe3b40cd93331ac77b", "span_id": "7f9a11a40774b762", "request_id": "61136c5e6ec5", "method": "POST", "route": "/ask", "status": 503, "ms": 123.3}
 ```
 
 ---
 
 ## 5. Benchmark scaling (production, Locust headless, 100 users, 2 phút)
 
+Số liệu từ `production/benchmark-results/scale_1_stats.csv` và `scale_3_stats.csv` (Locust headless `-u 100 -r 10 -t 2m --csv`, endpoint `/ask` qua Nginx):
+
 | Số instance | RPS | p50 (ms) | p95 (ms) | p99 (ms) | Failures |
 |---|---|---|---|---|---|
-| 1 | | | | | |
-| 3 | | | | | |
+| 1 | 57.53 | 200 | 810 | 1700 | 83/6872 (1.21%) |
+| 3 | 58.37 | 200 | 590 | 1700 | 69/6927 (1.00%) |
 
-**Giải thích kết quả:** Scale có cải thiện p95 không? Nút thắt nằm ở đâu?
-
-...
+**Giải thích kết quả:** Scale 1→3 **không tăng RPS** (57.5 → 58.4 req/s) vì 100 Locust users là tải cố định — mỗi user chờ response xong mới gửi tiếp, nên throughput bị chặn bởi số user × 1/latency, không phải bởi sức chứa hệ thống. Đổi lại **p95 giảm từ 810 → 590ms** (~27%): hàng chờ trên từng instance ngắn hơn khi Nginx chia tải đều. p99/p50 gần như không đổi vì p99 nằm ở nhóm request "slow" (mock 1.5s, đều như nhau ở mọi instance). Nút thắt thực sự nằm ở **LLM call** (sleep mô phỏng ~1700ms với 3% request) — nhìn panel LLM p95 của Grafana sẽ thấy đúng giá trị này; muốn tăng throughput thật phải tăng số users và scale agent song song, hoặc giảm latency LLM.
 
 ---
 
 ## 6. Kết luận
 
 - 3 điều bạn học được về benchmark & observability:
-  1. ...
-  2. ...
-  3. ...
+  1. **Average che giấu tail latency**: chỉ 3% request chậm đã đẩy p99 gấp ~7 lần trong khi p50 gần như không đổi — SLO phải đặt theo p95/p99 và alert phải dựa trên percentile, không phải mean.
+  2. **Observability có 3 lớp trả lời 3 câu hỏi khác nhau**: metrics nói *có vấn đề không* (alert), traces nói *vấn đề nằm ở đâu* (span LLM chiếm 98%), logs nói *chi tiết sự kiện gì* (grep `trace_id` khớp từng request). Một mình một lớp là không đủ debug.
+  3. **Metric của một service chỉ nhìn thấy những gì service đó thấy**: `docker pause` instance làm Locust ăn 504 từ Nginx nhưng Error rate của agent vẫn xanh (request chưa tới agent); và dashboard xanh không có nghĩa là agent trả lời đúng (thí nghiệm E) — cần eval + synthetic check + giám sát ở tầng LB.
 - Nếu đưa agent này lên production thật, bạn sẽ thêm metric / alert nào nữa?
-
-...
+  - **Alert theo SLO burn rate** (multi-window, vd 5m + 1h) thay vì ngưỡng cứng; alert disk/memory của container.
+  - **Metric từ tầng vào trước agent**: 5xx/504 của Nginx (hoặc Ingress), số connection bị reject — như thí nghiệm D cho thấy.
+  - **Business/quality metrics**: retrieval hit ratio alert khi về 0, eval accuracy chạy định kỳ, và alert khi tỉ lệ câu trả lời "từ chối/generic" tăng.
+  - **Sampling trace** (vd 10% + luôn giữ trace lỗi và trace chậm > p99) để không phát tốn tiền khi traffic lớn, và `user_id` hash (không raw) nếu cần segment — nhưng chú ý cardinality.
