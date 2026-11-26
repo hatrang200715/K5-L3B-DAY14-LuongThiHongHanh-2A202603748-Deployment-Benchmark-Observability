@@ -1,8 +1,8 @@
 #  Delivery Checklist — Day 14 Lab Submission
 
-> **Student Name:** _________________________  
-> **Student ID:** _________________________  
-> **Date:** _________________________
+> **Student Name:** Luong Thi Hong Hanh  
+> **Student ID:** 2A202603748
+> **Date:** 26/11/2026
 
 ---
 
