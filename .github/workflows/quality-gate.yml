@@ -1,0 +1,39 @@
+# Quality gate — Exercise 7.3
+# Chạy eval trên golden dataset trước khi deploy; run_eval.py exit code 1
+# (accuracy < min-accuracy hoặc có regression so với baseline) sẽ fail job và chặn merge.
+name: quality-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        working-directory: 06-lab-complete/benchmark-observability/develop
+        run: pip install -r requirements.txt
+
+      - name: Start agent v2
+        working-directory: 06-lab-complete/benchmark-observability/develop
+        run: |
+          AGENT_VERSION=v2 PORT=8002 python app.py &
+          sleep 5
+
+      - name: Quality gate (eval ≥ 100%, không regression so với baseline)
+        working-directory: 06-lab-complete/benchmark-observability/develop
+        # Exit code 1 => bước fail => PR không merge được
+        run: |
+          python eval/run_eval.py \
+            --url http://localhost:8002 \
+            --min-accuracy 1.0 \
+            --baseline reports/eval_v2.json \
+            --out reports/eval_ci.json
